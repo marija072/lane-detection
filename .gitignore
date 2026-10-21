@@ -1,0 +1,17 @@
+# Python temporary files
+__pycache__/
+*.pyc
+
+# Python virtual environment
+.venv/
+
+# VS Code settings
+.vscode/
+
+# Original test videos
+test_videos/
+
+# Generated results
+calibration_data/
+output_images/
+output_videos/
