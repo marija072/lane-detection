@@ -7,6 +7,9 @@ import numpy as np
 
 
 def main():
+    # Experimental: the calibration may come from a different camera.
+    USE_CAMERA_CALIBRATION = True
+
     # Resolve paths from the project directory.
     project_root = Path(__file__).resolve().parent.parent
     image_path = project_root / "test_images" / "solidYellowCurve.jpg"
@@ -16,6 +19,41 @@ def main():
     if image is None:
         print(f"Error: could not read input image: {image_path}")
         return
+
+    # Optionally correct distortion before any image processing.
+    if USE_CAMERA_CALIBRATION:
+        calibration_path = project_root / "calibration_data" / "camera_calibration.npz"
+        try:
+            with np.load(calibration_path, allow_pickle=False) as calibration_data:
+                camera_matrix = calibration_data["camera_matrix"]
+                distortion_coefficients = calibration_data["distortion_coefficients"]
+
+            # Check the array shapes and values before using OpenCV.
+            if camera_matrix.shape != (3, 3):
+                raise ValueError("camera_matrix must have shape (3, 3)")
+            if not (
+                distortion_coefficients.ndim in (1, 2)
+                and distortion_coefficients.size in (4, 5, 8, 12, 14)
+                and (distortion_coefficients.ndim == 1
+                     or 1 in distortion_coefficients.shape)
+            ):
+                raise ValueError("distortion_coefficients must be a supported vector")
+            for array in (camera_matrix, distortion_coefficients):
+                if array.dtype.kind not in "fiu" or not np.all(np.isfinite(array)):
+                    raise ValueError("calibration arrays must contain finite numbers")
+            if camera_matrix[0, 0] <= 0 or camera_matrix[1, 1] <= 0:
+                raise ValueError("camera focal lengths must be positive")
+
+            image = cv2.undistort(
+                image,
+                camera_matrix.astype(np.float64),
+                distortion_coefficients.astype(np.float64),
+            )
+        except (OSError, ValueError, KeyError, EOFError, cv2.error) as error:
+            print(f"Error: could not apply camera calibration from {calibration_path}: {error}")
+            return
+
+        print("Camera distortion correction applied.")
 
     # Find edges across the entire image.
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -143,12 +181,13 @@ def main():
         )
 
     # Save all results, even when no lines were found.
-    edges_path = output_dir / "solidYellowCurve_edges.jpg"
-    hough_path = output_dir / "solidYellowCurve_hough.jpg"
-    roi_edges_path = output_dir / "solidYellowCurve_roi_edges.jpg"
-    roi_hough_path = output_dir / "solidYellowCurve_roi_hough.jpg"
-    filtered_hough_path = output_dir / "solidYellowCurve_filtered_hough.jpg"
-    fitted_lanes_path = output_dir / "solidYellowCurve_fitted_lanes.jpg"
+    suffix = "_calibrated" if USE_CAMERA_CALIBRATION else ""
+    edges_path = output_dir / f"solidYellowCurve_edges{suffix}.jpg"
+    hough_path = output_dir / f"solidYellowCurve_hough{suffix}.jpg"
+    roi_edges_path = output_dir / f"solidYellowCurve_roi_edges{suffix}.jpg"
+    roi_hough_path = output_dir / f"solidYellowCurve_roi_hough{suffix}.jpg"
+    filtered_hough_path = output_dir / f"solidYellowCurve_filtered_hough{suffix}.jpg"
+    fitted_lanes_path = output_dir / f"solidYellowCurve_fitted_lanes{suffix}.jpg"
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
         edges_saved = cv2.imwrite(str(edges_path), edges)

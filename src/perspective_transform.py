@@ -24,7 +24,8 @@ def main():
     source_points = np.float32([
         (width * 0.45, height * 0.60),
         (width * 0.55, height * 0.60),
-        (width * 0.72, height * 0.95),
+        # Experimental adjustment to better align with the right lane marking.
+        (width * 0.82, height * 0.95),
         (width * 0.20, height * 0.95),
     ])
 
