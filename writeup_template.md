@@ -17,15 +17,15 @@ The goals / steps of this project are the following:
 * Warp the detected lane boundaries back onto the original image.
 * Output visual display of the lane boundaries and numerical estimation of lane curvature and vehicle position.
 
-<!-- Image references -->
+[//]: # (Image References)
 
-[image1]: docs/calibration10_comparison.jpg "Calibration distortion correction"
-[image2]: docs/solidYellowCurve_perspective_source_points.jpg "Perspective source points"
-[image3]: docs/solidYellowCurve_hsv_canny_roi.jpg "HSV and Canny ROI mask"
-[image4]: docs/solidYellowCurve_hsv_canny_birds_eye.jpg "Bird's-eye binary mask"
-[image5]: docs/solidYellowCurve_sliding_windows.jpg "Sliding-window candidates"
-[image6]: docs/solidYellowCurve_polynomial_lanes.jpg "Quadratic lane candidates"
-[image7]: docs/solidYellowCurve_lane_overlay.jpg "Lane area in the original camera view"
+[image1]: ./examples/undistort_output.png "Undistorted"
+[image2]: ./test_images/test1.jpg "Road Transformed"
+[image3]: ./examples/binary_combo_example.jpg "Binary Example"
+[image4]: ./examples/warped_straight_lines.jpg "Warp Example"
+[image5]: ./examples/color_fit_lines.jpg "Fit Visual"
+[image6]: ./examples/example_output.jpg "Output"
+[video1]: ./project_video.mp4 "Video"
 
 ---
 
@@ -35,94 +35,103 @@ The goals / steps of this project are the following:
 
 You're reading it!
 
-This writeup documents the completed image-based pipeline and its development experiments. Road-camera calibration compatibility remains unverified, and video work is still TODO. Figures are existing diagnostic outputs copied from `output_images/` into `docs/`, without rerunning the programs for this update. Earlier intermediate figures do not have recorded run settings; the final overlay was visually checked to contain no text annotations. The terminal examples and adaptive experiment counts below are verified development results supplied for this writeup, not newly executed tests or ground-truth accuracy measurements.
-
 ### Camera Calibration
 
 #### 1. Briefly state how you computed the camera matrix and distortion coefficients. Provide an example of a distortion corrected calibration image.
 
-In [src/camera_calibration.py](src/camera_calibration.py), `main()` searches `camera_cal/` for supported image files and uses a chessboard with **9 columns and 6 rows of internal corners**. It constructs a planar 54-point object grid with `np.mgrid`, using one chessboard square as the coordinate unit. Images are converted to grayscale with `cv2.cvtColor()`. `cv2.findChessboardCorners()` uses adaptive thresholding and image normalization; `cv2.cornerSubPix()` refines detected corners with an `(11, 11)` search window, at most 30 iterations, and an epsilon of `0.001`. Unreadable images, unsuccessful detections, and images with inconsistent dimensions are skipped.
+I implemented camera calibration in `main()` in [src/camera_calibration.py](src/camera_calibration.py). It reads images from `camera_cal/` and looks for a chessboard with **9 columns and 6 rows of internal corners**. I used `np.mgrid` to create a flat grid of 54 object points, with one chessboard square as the unit of distance.
 
-The collected object/image point pairs are passed to `cv2.calibrateCamera()`. The script prints the RMS reprojection error and saves `camera_matrix` and `distortion_coefficients` to `calibration_data/camera_calibration.npz`. No numerical calibration accuracy is claimed here because a calibration run was not performed for this writeup.
+I converted each image to grayscale with `cv2.cvtColor()` and found corners with `cv2.findChessboardCorners()`, using adaptive thresholding and image normalization. I then refined them with `cv2.cornerSubPix()`: an `(11, 11)` search window, up to 30 iterations, and an epsilon of `0.001`. The script skips unreadable images, failed detections, and images with different dimensions.
 
-In [src/undistort_image.py](src/undistort_image.py), `main()` loads those arrays with `np.load(..., allow_pickle=False)` and applies `cv2.undistort()` to `camera_cal/calibration10.jpg`. It saves the corrected image and a labeled side-by-side comparison, preserving image dimensions without cropping or resizing.
+I passed the matching object and image points to `cv2.calibrateCamera()`. The script prints the RMS reprojection error and saves `camera_matrix` and `distortion_coefficients` to `calibration_data/camera_calibration.npz`. I have not included a numerical calibration error here because calibration was not rerun for the writeup.
 
-![Original calibration image on the left and undistorted image on the right][image1]
+In [src/undistort_image.py](src/undistort_image.py), I loaded these arrays with `np.load(..., allow_pickle=False)` and used `cv2.undistort()` on `camera_cal/calibration10.jpg`. The script saves the corrected image and the comparison below. Neither image is cropped or resized.
+
+![Original calibration image on the left and undistorted image on the right][doc_image1]
+
+[doc_image1]: docs/calibration10_comparison.jpg "Calibration distortion correction"
+[doc_image2]: docs/solidYellowCurve_perspective_source_points.jpg "Perspective source points"
+[doc_image3]: docs/solidYellowCurve_hsv_canny_roi.jpg "HSV and Canny ROI mask"
+[doc_image4]: docs/solidYellowCurve_hsv_canny_birds_eye.jpg "Bird's-eye binary mask"
+[doc_image5]: docs/solidYellowCurve_sliding_windows.jpg "Sliding-window candidates"
+[doc_image6]: docs/solidYellowCurve_polynomial_lanes.jpg "Quadratic lane candidates"
+[doc_image7]: docs/solidYellowCurve_lane_overlay.jpg "Lane area in the original camera view"
 
 ### Pipeline (single images)
 
 #### 1. Provide an example of a distortion-corrected image.
 
-The calibration comparison above provides an existing distortion-correction example. The road-image pipeline in [src/color_threshold.py](src/color_threshold.py), `process_image()`, currently processes the original BGR input; it does **not** apply camera calibration before thresholding or warping.
+The comparison above shows distortion correction on a calibration image. My main road-image pipeline in [src/color_threshold.py](src/color_threshold.py) uses the original BGR image. It does **not** apply camera calibration before thresholding or warping.
 
-The earlier straight-line experiment in [src/lane_detection.py](src/lane_detection.py), `main()`, has a `USE_CAMERA_CALIBRATION` option. When enabled, it loads the saved calibration arrays, validates them, and calls `cv2.undistort()` before grayscale processing. Invalid calibration stops that image's processing, and corrected outputs receive a `_calibrated` suffix. The calibration camera may differ from the road-image camera, so this is an experiment rather than evidence of improved road geometry.
+I added a `USE_CAMERA_CALIBRATION` option to the earlier straight-line experiment in [src/lane_detection.py](src/lane_detection.py). When enabled, it checks the saved arrays and calls `cv2.undistort()` before grayscale conversion. Invalid calibration stops processing, and corrected outputs use a `_calibrated` suffix. However, I have not verified that the calibration images and road images came from compatible cameras, so I cannot claim that this improves the road images.
 
 **TODO: Complete the road-image distortion-correction example using verified calibration for the road camera.** Existing calibrated line-detection outputs are not a standalone corrected road image and do not establish camera compatibility.
 
 #### 2. Describe how (and identify where in your code) you used color transforms, gradients or other methods to create a thresholded binary image.  Provide an example of a binary image result.
 
-The current binary-mask pipeline is implemented in `process_image()` in [src/color_threshold.py](src/color_threshold.py). `main()` accepts an optional filename from `test_images/` (default `solidYellowCurve.jpg`) or `--all` for `.jpg`, `.jpeg`, and `.png` files. Outputs use each image's stem, and batch processing reports failures without stopping the remaining images.
+In this project, I built a lane detector for road images and then reused it for video. All 17 test images run without runtime failures, although some detections are visually inaccurate. I describe the implementation and the experiments below, including what did not work well.
 
-`cv2.cvtColor(image, cv2.COLOR_BGR2HSV)` converts the original image to HSV. `cv2.inRange()` selects yellow pixels between `[15, 80, 80]` and `[35, 255, 255]`, and white pixels between `[0, 0, 200]` and `[179, 50, 255]`. These are OpenCV HSV values (hue 0–179, saturation/value 0–255). The masks are combined with `cv2.bitwise_or()`. These fixed thresholds may need adjustment under different lighting conditions.
+The figures were copied from existing outputs into `docs/`; the programs were not rerun for this writing update. The settings used for some older figures were not recorded. The final overlay has been checked and contains no text. The reported measurements and video results come from development runs, not comparisons against labeled ground truth.
 
-Separately, the original image is converted to grayscale, blurred with `cv2.GaussianBlur(gray, (5, 5), 0)`, and processed with `cv2.Canny(blurred, 100, 170)`. The combined HSV mask and Canny edges are joined with `cv2.bitwise_or()`, retaining either color or edge evidence. This can retain unrelated objects and road edges as well as lane markings.
+The shared algorithm is in `process_frame()` in [src/color_threshold.py](src/color_threshold.py). `process_image()` loads an image, calls this function, and saves the diagnostics. I kept the same thresholds, fitting methods, validation, and filenames when adding video support.
 
-The ROI is created with `np.zeros_like()` and `cv2.fillPoly()`, then applied using `cv2.bitwise_and()`. Its vertices, expressed as fractions of width and height, are `(0.35, 0.55)`, `(0.65, 0.55)`, `(0.95, 0.95)`, and `(0.00, 0.95)`. The wide lower portion accommodates curved markings. Separate color masks, the color-filtered image, ROI mask/overlay, Canny image, and combined ROI mask are retained as diagnostics. Masks are binary in memory, although JPEG diagnostic files may introduce compression artifacts.
+I created the binary masks in `process_frame()` in [src/color_threshold.py](src/color_threshold.py). For images, `main()` accepts a filename from `test_images/`, defaults to `solidYellowCurve.jpg`, or processes all `.jpg`, `.jpeg`, and `.png` files with `--all`. Output names use the input image's stem. If one image fails, the batch continues with the others.
 
-![Existing combined HSV and Canny mask within the road ROI][image3]
+I converted the image to HSV with `cv2.cvtColor(image, cv2.COLOR_BGR2HSV)`. With `cv2.inRange()`, I selected yellow pixels between `[15, 80, 80]` and `[35, 255, 255]`, and white pixels between `[0, 0, 200]` and `[179, 50, 255]`. OpenCV uses hue values from 0–179 and saturation/value from 0–255. I combined the masks with `cv2.bitwise_or()`. These fixed ranges are sensitive to lighting.
+
+I also converted the original image to grayscale, applied `cv2.GaussianBlur(gray, (5, 5), 0)`, and found edges with `cv2.Canny(blurred, 100, 170)`. The default method combines these edges with the HSV mask using `cv2.bitwise_or()`. This keeps lane pixels found by either method, but it also keeps some unrelated road edges and objects.
+
+To focus on the road, I made an ROI mask with `np.zeros_like()` and `cv2.fillPoly()`, then applied it with `cv2.bitwise_and()`. Its vertices are `(0.35, 0.55)`, `(0.65, 0.55)`, `(0.95, 0.95)`, and `(0.00, 0.95)`, as fractions of image width and height. I kept the bottom wide enough for curved markings. The script saves the separate masks, color-filtered image, ROI mask and outline, Canny edges, and combined ROI mask so I can inspect each step. The masks are binary in memory, although saved JPEGs can contain compression artifacts.
+
+![Existing combined HSV and Canny mask within the road ROI][doc_image3]
 
 #### 3. Describe how (and identify where in your code) you performed a perspective transform and provide an example of a transformed image.
 
-In `process_image()` in [src/color_threshold.py](src/color_threshold.py), `cv2.getPerspectiveTransform(source_points, destination_points)` computes a homography, and `cv2.warpPerspective()` applies it to the combined HSV/Canny ROI mask. Output dimensions remain `(width, height)`. `cv2.INTER_NEAREST` avoids interpolating intermediate values into the in-memory binary mask.
+In `process_frame()`, I used `cv2.getPerspectiveTransform(source_points, destination_points)` to calculate the perspective matrix. I applied it to the HSV/Canny ROI mask with `cv2.warpPerspective()`, keeping the output size `(width, height)`. I used `cv2.INTER_NEAREST` so the binary mask does not gain intermediate values through interpolation.
 
-The fixed source and destination points are ordered top-left, top-right, bottom-right, bottom-left. Each pair below is a fraction of image width and height:
-
-| Corner | Fixed source | Destination |
-| --- | --- | --- |
-| Top-left | `(0.45, 0.60)` | `(0.25, 0.05)` |
-| Top-right | `(0.55, 0.60)` | `(0.75, 0.05)` |
-| Bottom-right | `(0.82, 0.95)` | `(0.75, 0.95)` |
-| Bottom-left | `(0.20, 0.95)` | `(0.25, 0.95)` |
+I ordered the corners top-left, top-right, bottom-right, and bottom-left. The fixed source points are `(0.45, 0.60)`, `(0.55, 0.60)`, `(0.82, 0.95)`, and `(0.20, 0.95)`. Their matching destination points are `(0.25, 0.05)`, `(0.75, 0.05)`, `(0.75, 0.95)`, and `(0.25, 0.95)`. Each pair gives fractions of image width and height. This maps the road trapezoid to a rectangle.
 
 The independent experiment in [src/perspective_transform.py](src/perspective_transform.py), `main()`, uses the same fixed point definitions to warp the color road image with `cv2.INTER_LINEAR`. Its source trapezoid is outlined before saving. The main pipeline also saves a labeled source-point visualization.
 
-![Existing source-point diagnostic showing the road trapezoid][image2]
+![Existing source-point diagnostic showing the road trapezoid][doc_image2]
 
-![Existing warped HSV and Canny binary mask][image4]
+![Existing warped HSV and Canny binary mask][doc_image4]
 
-The fixed transform is a manually selected planar-road approximation. It does not adapt to camera pose, hills, or different lane geometry, and it does not guarantee parallel boundaries or constant pixel lane width. It establishes no pixel-to-meter scale. The example retains unrelated features, so a bird's-eye image alone is not proof of correct lane detection.
+I chose these points manually, assuming a roughly flat road. They do not adjust to hills, camera movement, or every lane shape, so the warped boundaries are not always parallel or equally spaced. The transform also gives no pixel-to-meter scale. Unrelated features are still visible in the warped mask.
 
-The **experimental** adaptive option is retained, but the current default is `USE_ADAPTIVE_PERSPECTIVE = False`. `estimate_source_points(mask)` uses `cv2.HoughLinesP()` on the HSV/Canny ROI mask with rho `1`, theta `np.pi / 180`, threshold `50`, minimum line length `40`, and maximum gap `10`. It skips vertical segments and slopes with magnitude below `0.3`, groups negative/positive slopes, and estimates positions at `0.60 * height` and `0.95 * height`. Each side needs at least three segments and vertical support within `0.05 * height` of those heights. Median positions are used; the 75th percentile of deviations must not exceed `0.08 * width`. Finite, in-image coordinates and a widening, correctly ordered trapezoid are required: top width is `0.05–0.40 * width`, bottom width is `0.25–0.95 * width`, and bottom width must exceed `1.2` times top width. Failed checks select the fixed fallback, and the selected mode is printed. The selected points are shared by the forward warp, source-point diagnostic, and inverse overlay.
+I also added an experimental adaptive option in `estimate_source_points(mask)`. It uses `cv2.HoughLinesP()` on the HSV/Canny ROI mask with rho `1`, theta `np.pi / 180`, threshold `50`, minimum line length `40`, and maximum gap `10`. It skips vertical segments and slopes smaller than `0.3` in magnitude. Negative and positive slopes form the left and right groups, which estimate boundary positions at `0.60 * height` and `0.95 * height`.
 
-In the development batch with adaptive selection enabled, **17 images were processed: only `solidYellowLeft.jpg` used the adaptive transform; the other 16 used the fixed fallback**. The default was subsequently set to `False` because acceptance was low and no visual improvement had been demonstrated. This was a practical experiment decision, not a proven accuracy comparison between fixed and adaptive transforms. Straight-segment estimates can be unreliable on curved or unrelated markings. The earlier saved intermediate figures do not record which transform mode was selected.
+I added checks to avoid using poorly supported estimates. Each side needs at least three segments reaching within `0.05 * height` of the selected heights. I use median positions and require the 75th percentile of deviations to stay within `0.08 * width`. The corners must be finite, inside the image, and form a correctly ordered trapezoid that widens toward the bottom. Its top width must be `0.05–0.40 * width`, its bottom width `0.25–0.95 * width`, and the bottom must be more than `1.2` times as wide as the top. If a check fails, the code uses the fixed points and prints the selected mode. The warp, source-point image, and inverse overlay all use the same selected points.
+
+I tested adaptive selection on **17 images. Only `solidYellowLeft.jpg` used the adaptive transform; the other 16 used the fixed fallback**. Since it was rarely accepted and did not show a clear visual improvement, I kept `USE_ADAPTIVE_PERSPECTIVE = False` as the default. This does not prove that fixed perspective is more accurate. Straight-segment estimates can struggle with curves and unrelated markings. The transform mode was not recorded for the older intermediate figures.
 
 #### 4. Describe how (and identify where in your code) you identified lane-line pixels and fit their positions with a polynomial?
 
-Lane-pixel search and quadratic fitting are also in `process_image()` in [src/color_threshold.py](src/color_threshold.py). A column histogram is calculated with `np.sum(birds_eye_mask[height // 2:, :], axis=0)`, using the bottom half of the warped mask. `np.argmax()` locates one initial candidate in each horizontal half; an empty or all-zero half provides no starting candidate. The histogram graph and candidate-position image are saved for inspection.
+To find starting positions in `process_frame()`, I summed the bottom half of the warped mask by column with `np.sum(birds_eye_mask[height // 2:, :], axis=0)`. I used `np.argmax()` to find one peak in the left half and one in the right half. If a half is empty or all zero, it has no starting candidate. I saved the histogram and peak positions as diagnostic images.
 
-The sliding-window search uses **9 horizontal windows**, an **80-pixel horizontal margin**, and a **30-pixel recentering minimum**. It moves from bottom to top, collects nonzero mask pixels within each window, and shifts the next window to their mean x-coordinate when at least 30 pixels are found. Otherwise it retains the previous center. Left and right pixel coordinates are collected separately. These are candidate pixels, not confirmed lane labels; unrelated markings and overlapping search windows can contaminate them.
+I searched upward using **9 horizontal windows**, with an **80-pixel margin** on each side of the current center. If a window contains at least **30 pixels**, I move the next window to their mean x-coordinate. Otherwise, I keep the previous center. Left and right coordinates are collected separately. The windows can still collect unrelated markings, and overlapping windows can collect the same pixels.
 
-![Existing sliding-window search, with left windows green and right windows blue][image5]
+![Existing sliding-window search, with left windows green and right windows blue][doc_image5]
 
-For each side, non-finite points are removed. At least three points at three distinct y-coordinates are required. `np.polyfit(y_points, x_points, 2, full=True)` fits `x(y) = a*y**2 + b*y + c`; fits with insufficient rank or non-finite coefficients are skipped. `np.polyval()` evaluates valid fits, with coefficients printed separately for each side. Diagnostic left curves are green and right curves blue. The current code draws only between each side's minimum and maximum observed candidate y-values and breaks drawing outside the image.
+For each side, I remove non-finite points and require at least three points at three different y-coordinates. I fit `x(y) = a*y**2 + b*y + c` with `np.polyfit(y_points, x_points, 2, full=True)`. Fits with insufficient rank or non-finite coefficients are skipped. I evaluate the curves with `np.polyval()` and print their coefficients. The left diagnostic curve is green and the right is blue. Each is drawn only between its lowest and highest observed candidate rows, with drawing stopped outside the image.
 
-![Existing quadratic-fit diagnostic; saved results may predate the current supported-range drawing restriction][image6]
+![Existing quadratic-fit diagnostic; saved results may predate the current supported-range drawing restriction][doc_image6]
 
-The current code also checks fitted geometry before allowing the final polygon: non-finite coordinates and non-positive separation reject the pair. Excessive width variation is rejected only when the maximum exceeds four times the minimum **and** the width spread exceeds half the image width, allowing moderate variation. The polygon is restricted to the overlap of the two observed y-ranges with no extension; it requires at least two rows and 10% of image height. Invalid/out-of-image portions are excluded and disconnected valid sections remain separate. These checks reduce implausible overlays but do not establish that the selected pixels belong to the correct lane.
+Before drawing the lane area, I check that the boundaries have finite coordinates and positive separation. To allow moderate width variation, I reject a pair for inconsistent width only when the maximum is more than four times the minimum **and** the spread is more than half the image width. The polygon stays within the overlap of the observed y-ranges, with no extension. This overlap must cover at least two rows and 10% of the image height. Invalid or out-of-image sections are excluded, and separate valid sections are not joined across gaps. These checks catch implausible shapes, but they cannot tell whether the pixels belong to the correct lane.
 
 #### 5. Describe how (and identify where in your code) you calculated the radius of curvature of the lane and the position of the vehicle with respect to center.
 
-In [src/color_threshold.py](src/color_threshold.py), `process_image()` reuses the separate left and right quadratic fits described in step 4: `x(y) = a*y**2 + b*y + c`. `radius_of_curvature(coefficients, y)` calculates each boundary's radius using the first derivative `2*a*y + b` and second derivative `2*a`:
+I reused the left and right fits from step 4, `x(y) = a*y**2 + b*y + c`. In [src/color_threshold.py](src/color_threshold.py), `radius_of_curvature(coefficients, y)` uses the first derivative `2*a*y + b` and second derivative `2*a` to calculate:
 
 ```text
 R = (1 + (2*a*y + b)**2)**1.5 / abs(2*a)
 ```
 
-The existing curvature calculation evaluates each available fit at `y = height - 1`. If `abs(a) < 1e-10`, it reports an infinite radius for an effectively straight fit instead of dividing by zero. Missing fits are reported as unavailable. These values are **radii in warped-image pixels, not meters**. Unlike the supported overlay and offset, this curvature evaluation can be below the observed pixel range, so it can describe an extrapolated fit and must be interpreted cautiously.
+I calculate curvature at `y = height - 1`. If `abs(a) < 1e-10`, the function returns an infinite radius for a nearly straight fit. Missing fits are reported as unavailable. The result is **in warped-image pixels, not meters**. This calculation can evaluate the curve below the observed pixels, so it is less reliable when it relies on extrapolation.
 
-The horizontal vehicle offset is also calculated in `process_image()`. Both fits must exist, pass geometry validation, and have sufficient overlapping vertical support. Within that shared range, the code selects the lowest valid image row (the largest y) where both fitted x-coordinates are finite, inside the image, and ordered left before right. It does not extrapolate below the supported range for this calculation. If these conditions cannot be met, the offset is unavailable.
+For the horizontal vehicle offset in `process_frame()`, I require both fits to pass geometry checks and have enough shared vertical support. I use the lowest valid row in that shared range, meaning the largest y where both boundaries are finite, inside the image, and in the correct left-to-right order. This calculation does not extend below the supported range. If no suitable row exists, the offset is unavailable.
 
-The calculation assumes that the camera, and therefore the estimated vehicle center, is horizontally centered at `image_width / 2` in the bird's-eye image:
+I assume the camera and vehicle are horizontally centered at `image_width / 2` in the bird's-eye image:
 
 ```text
 lane_center_x = (left_x + right_x) / 2
@@ -132,47 +141,68 @@ offset_px = vehicle_center_x - lane_center_x
 
 A **positive** offset places the estimated vehicle to the **right** of lane center; a **negative** offset places it to the **left**. The terminal prints the evaluation y-coordinate, lane center, vehicle center, and signed pixel offset, and the per-image summary includes the available measurements.
 
-Verified development terminal examples are:
+The verified terminal results were **-0.99 px** for `straight_lines2.jpg`, **-15.88 px** for `solidYellowCurve.jpg`, and **-29.94 px** for `challange00101.jpg`. All three place the estimated vehicle to the left of lane center under the centered-camera assumption.
 
-| Input image | Signed vehicle offset |
-| --- | ---: |
-| `straight_lines2.jpg` | -0.99 px |
-| `solidYellowCurve.jpg` | -15.88 px |
-| `challange00101.jpg` | -29.94 px |
-
-All three negative values indicate an estimated vehicle position left of lane center under this assumption. These examples demonstrate reported pixel offsets, not verified physical displacement. No justified pixel-to-meter scale has been established, and camera placement and road-camera calibration compatibility remain unverified. Neither offset nor curvature is converted to meters or based on an assumed physical lane width.
+I have not established a pixel-to-meter scale or verified the camera placement and calibration compatibility. I therefore report both offset and curvature in pixels, without assuming a physical lane width.
 
 #### 6. Provide an example image of your result plotted back down onto the road such that the lane area is identified clearly.
 
-The final visualization is produced by `process_image()` in [src/color_threshold.py](src/color_threshold.py). An empty BGR image is created in bird's-eye coordinates. The two polynomials are evaluated only for polygon construction within their shared observed y-range. Rows must have finite, in-image coordinates with the left boundary before the right; disconnected valid sections are handled separately. Each safe polygon is filled green with `cv2.fillPoly()`, with the left boundary drawn red and the right boundary blue. Geometry validation and the minimum shared-support requirement from step 4 must pass before the overlay is attempted. Missing fits, rejected geometry, insufficient support, or degenerate polygons produce a clear skip message.
+To make the final overlay in `process_frame()`, I start with an empty BGR image in bird's-eye coordinates. I form polygons between the fitted curves within their shared observed y-range, using only valid, in-image rows with the left boundary before the right. Separate valid sections are handled separately. I fill the area green with `cv2.fillPoly()`, draw the left boundary red, and draw the right boundary blue. The checks from step 4 must pass first. If a fit is missing, support is insufficient, or a safe polygon cannot be formed, the script prints why the overlay was skipped.
 
-`cv2.getPerspectiveTransform(destination_points, source_points)` computes the inverse homography using the same selected points as the forward transform. `cv2.warpPerspective()` maps the colored lane area back to the original image dimensions. `cv2.addWeighted(image, 1.0, warped_lane_area, 0.4, 0)` blends the visualization with the original road image so the road remains visible. The output is `<image_stem>_lane_overlay.jpg`.
+I reverse the perspective transform with `cv2.getPerspectiveTransform(destination_points, source_points)`, using the same points as before. Then `cv2.warpPerspective()` maps the colored area back to the original camera view. I blend it with the road using `cv2.addWeighted(image, 1.0, warped_lane_area, 0.4, 0)`, so the road remains visible. The image wrapper saves it as `<image_stem>_lane_overlay.jpg`.
 
-![Detected lane area overlaid on solidYellowCurve.jpg, without text annotations][image7]
+![Detected lane area overlaid on solidYellowCurve.jpg, without text annotations][doc_image7]
 
-This example was copied from the current `output_images/solidYellowCurve_lane_overlay.jpg` and visually checked to contain no text annotations. The final image shows only the lane-area and boundary visualization; curvature, offset, support, and validation messages remain in the terminal. The pictured result illustrates lane-area projection on this image, not a quantitative accuracy result or a claim of robustness across the test set.
+This is the existing `output_images/solidYellowCurve_lane_overlay.jpg`. It shows the lane area and boundaries without text annotations. Curvature, offset, and validation messages stay in the terminal. It is an example of the result on one image, not an accuracy score for the whole test set.
 
 ### Pipeline (video)
 
 #### 1. Provide a link to your final video output.  Your pipeline should perform reasonably well on the entire project video (wobbly lines are ok but no catastrophic failures that would cause the car to drive off the road!).
 
-**TODO: Complete the video pipeline and provide a reviewed output video.** The current implementation processes individual images or batches of images; it does not implement temporal tracking or a validated video pipeline.
+I added video processing in [src/video_pipeline.py](src/video_pipeline.py). For example, `python src/video_pipeline.py project_video01.mp4` reads that file from `test_videos/`. I use `cv2.VideoCapture()` to open it, check the first frame, and read the FPS. Invalid FPS is rejected rather than replaced with a guessed value.
+
+The first frame sets the output dimensions. I use `cv2.VideoWriter()` with the `mp4v` codec, the same dimensions, and the input FPS. The result is saved to `output_videos/<video_stem>_lane_overlay.mp4`, creating the folder if needed. Frames are not resized or deliberately skipped. A dimension change stops processing, and detectable read/write errors are reported. The capture and writer are released even after an error. OpenCV cannot identify every decoding or encoding failure, and this writer does not preserve audio.
+
+For each BGR frame, I call `process_frame(frame, diagnostics=False, verbose=False)`. It returns the BGR result, measurements and validation information, and optional diagnostic images. It uses the same image algorithm, with fixed perspective by default and no extension of the lane polygon beyond shared support. I disable diagnostic images and detailed printing during video processing. Measurements remain available in the returned metadata, and the overlays contain no text.
+
+If detection is rejected or processing raises an exception, I write the original frame so the video stays continuous. At the end, the script reports frames written, accepted and rejected detections, and processing errors. It processes frames independently, without temporal smoothing or tracking.
+
+Existing local outputs:
+
+* [project_video01 lane-overlay video](output_videos/project_video01_lane_overlay.mp4): the run wrote **221 frames, with 221 accepted detections, 0 rejected detections, and 0 processing errors**. I confirmed that it plays in Windows Media Player. These counts show that processing worked, not that every boundary was correct.
+* [project_video02 lane-overlay video](output_videos/project_video02_lane_overlay.mp4): I reviewed the video and found that it worked reasonably well, but not perfectly. I have not reported extra frame totals or accuracy scores for it.
+* [challenge01 lane-overlay video](output_videos/challenge01_lane_overlay.mp4): I noticed more inaccuracies around shadows and distracting edges. Later sections looked better, but I did not measure an accuracy difference between sections.
+
+These links point to local output files. Since `output_videos/` is ignored by the repository, someone cloning the project will need to generate or obtain the videos separately.
+
+To investigate `challenge01.mp4`, I compared six frames: **0, 25, 88, 138, 200, and 238**. I saved the originals, color masks, Canny edges, combined and ROI masks, bird's-eye masks, sliding windows, fitted curves, and text-free overlays under `output_images/challenge01_diagnostics/`.
+
+All six passed geometry checks and produced overlays. However, the diagnostics showed fragmented white markings, shadow edges, unrelated contours, and clutter inside the warped search windows. The strongest tree shadows in these samples were around frame 88, not at the beginning. Frame 138's overlay stopped higher because its right-side pixel support ended earlier. I found that a frame can process successfully and pass geometry checks while still identifying the lane incorrectly.
+
+I then tested color-gated Canny on the same six saved frames, changing no other parameters. The default combination is `HSV | Canny`. The optional call `process_frame(..., color_gated_canny=True, dilation_kernel_size=5)` instead uses `HSV | (Canny & dilate(HSV))`. A single dilation with a 5-by-5 kernel allows edges near HSV-selected pixels. It does not expand the retained HSV pixels themselves. Both methods produced accepted detections on all six frames.
+
+The gated masks had fewer unwanted shadow and guardrail edges, but they also lost useful lane edges. In frame 88, the overlay ended noticeably earlier near the car. Frames 138 and 238 lost support farther up the road. Frame 88's nonzero ROI pixel count dropped from **12,627 to 7,714**, and frame 138's dropped from **9,478 to 6,199**. Fewer pixels did not automatically mean a better result.
+
+I kept unrestricted HSV/Canny as the default for images and videos. Color gating was **inconclusive as an accuracy improvement**, and some overlays covered less of the visible lane. The optional mode remains available for further experiments.
+
+The [sample report](output_images/challenge01_diagnostics/findings.md), [color-gating report](output_images/challenge01_diagnostics/color_gate_comparison/findings.md), and [measurements](output_images/challenge01_diagnostics/color_gate_comparison/measurements.json) contain the details. In the side-by-side images, baseline is on the left and gated is on the right. These files are local diagnostics under the ignored `output_images/` folder, so they are not included automatically in a repository checkout.
 
 ### Discussion
 
 #### 1. Briefly discuss any problems / issues you faced in your implementation of this project.  Where will your pipeline likely fail?  What could you do to make it more robust?
 
-Development began with the straight-segment experiment in [src/lane_detection.py](src/lane_detection.py): grayscale conversion, a `(5, 5)` Gaussian blur, Canny thresholds `100/170`, and probabilistic Hough detection. Full-image and ROI results were saved separately, followed by slope-filtered left/right segments and straight fits. Running the same straight-line approach on `solidYellowCurve.jpg` motivated a separate curved-lane experiment based on color masks, a bird's-eye view, sliding windows, and quadratic fits. This progression was an implementation experiment, not a measured accuracy benchmark.
+I started with straight-line detection in [src/lane_detection.py](src/lane_detection.py), using grayscale conversion, a `(5, 5)` Gaussian blur, Canny thresholds `100/170`, and probabilistic Hough detection. I saved full-image and ROI results separately, then added slope filtering and left/right straight fits. Testing this approach on `solidYellowCurve.jpg` led me to try color masks, a bird's-eye view, sliding windows, and quadratic fits for curved lanes.
 
-Visual diagnostics guided coordinate changes. The color ROI's lower-left edge initially clipped the yellow marking and was widened to `0.00 * width`, while retaining room for the right dashed marking. Perspective experiments narrowed an overly broad source trapezoid and later moved its lower-right x-coordinate from `0.72` to `0.82`. A temporary `straight_lines1.jpg` top-right override of `0.53` was removed; the shared top-right fraction is `0.55` for every image. These were manual alignment decisions, not evidence that one homography is correct for every camera or road.
+The saved images helped me adjust the coordinates. The ROI initially cut off the lower yellow marking, so I moved its lower-left corner to `0.00 * width` while keeping space for the right dashed marking. I narrowed an overly wide perspective trapezoid, then moved its lower-right x fraction from `0.72` to `0.82`. I also tried a top-right fraction of `0.53` for `straight_lines1.jpg`, but removed that image-specific change. All images now use `0.55`. These changes improved the manual alignment being tested; they do not make the transform suitable for every road or camera.
 
-The adaptive-perspective batch supplied a concrete result: 1 of 17 images (`solidYellowLeft.jpg`) accepted the adaptive estimate, while 16 used fixed fallback. With low acceptance and no demonstrated visual improvement, fixed perspective became the default. The experimental estimator remains available. This result measures acceptance under its checks, not lane-detection accuracy, and does not prove that fixed perspective is more accurate.
+Two experiments did not give a clear reason to replace the baseline. Adaptive perspective was accepted for only 1 of 17 images, and color-gated Canny removed useful support along with clutter. I therefore kept fixed perspective and unrestricted HSV/Canny as the defaults. The detailed results are in the perspective and video sections; neither experiment established which method is more accurate against ground truth.
 
-Later changes limited unsupported visualization: diagnostic curves stop at their observed candidate y-ranges, and final polygons require sufficient overlap without extending below it. Geometry checks reject crossed boundaries and extreme width inconsistency while allowing moderate variation. The offset examples in step 5 and the text-free overlay in step 6 document current image-based outputs. They do not verify the selected pixels against labeled lanes, establish real-world distances, or validate all images in the batch. Curvature still evaluates at the image bottom even when that row is outside observed support; this is a remaining interpretation limitation.
+I also limited how far the fitted curves are drawn. Diagnostic curves stop at their observed y-ranges, and the final polygon uses only their shared range. Geometry checks reject crossed boundaries and extreme width changes. These changes avoid filling large unsupported areas, but a plausible shape can still follow the wrong pixels. Curvature is still evaluated at the image bottom, even when the observed support ends earlier.
 
-Observed intermediate masks contain unrelated road edges and bright features, and fixed perspective does not guarantee constant lane width. Additional expected failure cases include shadows, glare, faded paint, occlusion, hills, camera-pose changes, and neighboring markings that attract a histogram peak or sliding window. Slope filtering can confuse boundaries on strong curves, and overlapping windows can collect the same pixels. Geometry checks can reject implausible pairs but cannot establish lane identity. Calibration-camera compatibility is still unverified, so physical curvature and offset claims would be unjustified.
+The diagnostics showed unrelated road edges and bright objects in the masks. Shadows and fragmented markings were especially troublesome in `challenge01.mp4`. I also expect glare, faded paint, occlusion, hills, camera-pose changes, and neighboring markings to cause problems. A histogram peak can start on the wrong feature, windows can collect unrelated or shared pixels, and the adaptive estimator's slope filtering can struggle on strong curves. The fixed transform does not guarantee constant lane width either.
 
-**Proposed future work, not tested improvements:** review predictions against labeled lane boundaries; log reproducible per-image configurations and rejection reasons; verify road-camera calibration and a defensible geometric scale; evaluate lighting-robust thresholds and stronger candidate selection; assess support-aware curvature evaluation and fitting confidence. Video work could investigate temporal tracking, smoothing, and recovery after lost detections, but their effects have not been tested here.
+The video tests made the difference between processing success and visual quality clear. `project_video01.mp4` encoded and played correctly, and `project_video02.mp4` looked reasonably good. However, the six inspected challenge frames all passed validation even though their masks and overlays had problems. Since each frame is processed independently, moving fits and lost support can cause flicker or abrupt cutoffs. I have not added smoothing or tracking yet.
 
-**TODO after video testing:** extend this discussion with observed temporal failures, reviewed video examples, and evidence for any proposed robustness improvements. No video-performance results are claimed at this checkpoint.
+The measurements also have limits. Offset assumes a centered camera, and both offset and curvature are in pixels. I still need to verify road-camera calibration compatibility and establish a justified scale before reporting meters.
 
+**Remaining TODO:** I would like to review more video sections against labeled lanes, record run settings and rejection reasons, and test lighting-robust thresholds and stronger pixel selection. Other possible improvements are fit-confidence checks, curvature evaluated within observed support, temporal smoothing, tracking, and recovery after lost detections. These are ideas for controlled tests, not improvements that I have already demonstrated.
