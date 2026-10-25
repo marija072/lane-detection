@@ -6,19 +6,21 @@ from pathlib import Path
 
 import cv2
 
-from color_threshold import process_frame
+from color_threshold import CalibrationError, load_calibration, process_frame, undistort_frame
 
 
 def main():
     parser = argparse.ArgumentParser(description="Add lane overlays to a test video.")
     parser.add_argument("video_filename", help="Video filename inside test_videos")
+    parser.add_argument("--undistort", action="store_true", help="Apply saved camera calibration")
     args = parser.parse_args()
     if Path(args.video_filename).name != args.video_filename:
         parser.error("provide only a filename from test_videos")
 
     project_root = Path(__file__).resolve().parent.parent
     input_path = project_root / "test_videos" / args.video_filename
-    output_path = project_root / "output_videos" / f"{input_path.stem}_lane_overlay.mp4"
+    suffix = "_undistorted" if args.undistort else ""
+    output_path = project_root / "output_videos" / f"{input_path.stem}_lane_overlay{suffix}.mp4"
     if not input_path.is_file():
         print(f"Error: input video not found: {input_path}")
         return 1
@@ -31,6 +33,7 @@ def main():
     processing_errors = 0
     completed = False
     try:
+        calibration = load_calibration(project_root / "calibration_data" / "camera_calibration.npz") if args.undistort else None
         capture = cv2.VideoCapture(str(input_path))
         if not capture.isOpened():
             raise RuntimeError(f"could not open video: {input_path}")
@@ -43,6 +46,12 @@ def main():
         if not ok or frame is None or frame.size == 0:
             raise RuntimeError("could not read the first video frame")
         height, width = frame.shape[:2]
+        if calibration is not None:
+            # Check compatibility before opening the output writer.
+            _, scale = undistort_frame(frame, calibration)
+            print(f"Distortion correction enabled: matrix scale={scale:g}")
+        else:
+            print("Distortion correction disabled")
         output_path.parent.mkdir(parents=True, exist_ok=True)
         writer = cv2.VideoWriter(
             str(output_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height)
@@ -57,15 +66,15 @@ def main():
 
             # No diagnostic files, per-frame measurements, or temporal tracking.
             try:
-                result_frame, metadata, _ = process_frame(frame)
+                result_frame, metadata, _ = process_frame(frame, calibration=calibration)
                 detected = metadata["success"]
-                if not detected:
-                    result_frame = frame
                 if result_frame.shape != frame.shape or result_frame.dtype != frame.dtype:
                     raise ValueError("lane detector returned an incompatible frame")
+            except CalibrationError:
+                raise
             except Exception:
                 # Preserve this frame even if detection raises an unexpected error.
-                result_frame = frame
+                result_frame = undistort_frame(frame, calibration)[0] if calibration is not None else frame
                 detected = False
                 processing_errors += 1
 

@@ -9,6 +9,54 @@ import numpy as np
 
 # Enable this experiment to estimate perspective points from road markings.
 USE_ADAPTIVE_PERSPECTIVE = False
+SHOW_MEASUREMENTS = True
+
+
+class CalibrationError(RuntimeError):
+    """Correction was requested but could not be applied safely."""
+
+
+def load_calibration(path):
+    """Load and validate the saved 1280x720 calibration once per run."""
+    try:
+        with np.load(path, allow_pickle=False) as data:
+            matrix = data["camera_matrix"]
+            distortion = data["distortion_coefficients"]
+            size = data["image_size"]
+        for array in (matrix, distortion, size):
+            if array.dtype.kind not in "fiu" or not np.all(np.isfinite(array)):
+                raise ValueError("calibration arrays must contain finite real numbers")
+        if (matrix.shape != (3, 3) or matrix[0, 0] <= 0 or matrix[1, 1] <= 0
+                or not np.allclose(matrix[2], [0, 0, 1])
+                or abs(np.linalg.det(matrix)) < 1e-12):
+            raise ValueError("invalid 3x3 camera matrix")
+        if (distortion.ndim not in (1, 2) or distortion.size not in (4, 5, 8, 12, 14)
+                or (distortion.ndim == 2 and 1 not in distortion.shape)):
+            raise ValueError("invalid distortion coefficient vector")
+        if size.shape != (2,) or not np.array_equal(size, [1280, 720]):
+            raise ValueError("image_size must be (1280, 720), ordered width, height")
+        return {"camera_matrix": matrix.astype(np.float64),
+                "distortion_coefficients": distortion.astype(np.float64),
+                "image_size": (1280, 720)}
+    except (OSError, ValueError, KeyError, EOFError) as error:
+        raise CalibrationError(f"could not load calibration {path}: {error}") from error
+
+
+def undistort_frame(frame, calibration):
+    """Keep full dimensions; assume 960x540 is a uniform full-view resize."""
+    height, width = frame.shape[:2]
+    if (width, height) not in ((1280, 720), (960, 540)):
+        raise CalibrationError(f"unsupported correction resolution {width}x{height}; expected 1280x720 or 960x540")
+    scale = 1.0 if width == 1280 else 0.75
+    matrix = calibration["camera_matrix"].copy()
+    matrix[:2, :] *= scale
+    try:
+        corrected = cv2.undistort(frame, matrix, calibration["distortion_coefficients"])
+    except cv2.error as error:
+        raise CalibrationError(f"undistortion failed: {error}") from error
+    if corrected is None or corrected.shape != frame.shape:
+        raise CalibrationError("undistortion returned an invalid image")
+    return corrected, scale
 
 
 def estimate_source_points(mask):
@@ -91,10 +139,10 @@ def radius_of_curvature(coefficients, y):
 
 
 def process_frame(frame, diagnostics=False, verbose=False, *,
-                  color_gated_canny=False, dilation_kernel_size=5):
+                  color_gated_canny=False, dilation_kernel_size=5, calibration=None):
     """Return (BGR result, metadata, diagnostics dict) without file I/O.
 
-    A rejected detection returns an unchanged copy of the input frame.
+    A rejected detection returns the corrected image when calibration is supplied.
     Curvature and offset remain in warped-image pixels, not meters.
     Experimental color gating keeps Canny edges only near HSV-selected pixels.
     """
@@ -102,10 +150,15 @@ def process_frame(frame, diagnostics=False, verbose=False, *,
             or frame.ndim != 3 or frame.shape[2] != 3 or frame.size == 0):
         raise ValueError("frame must be a nonempty uint8 BGR image")
     image = frame
+    calibration_scale = None
+    if calibration is not None:
+        image, calibration_scale = undistort_frame(frame, calibration)
 
     def log(*args, **kwargs):
         if verbose:
             print(*args, **kwargs)
+
+    log(f"Distortion correction: {'disabled' if calibration is None else f'enabled, matrix scale={calibration_scale:g}'}")
 
     # OpenCV HSV ranges: H = 0-179, S and V = 0-255.
     # Adjust these initial thresholds for different lighting conditions.
@@ -540,6 +593,8 @@ def process_frame(frame, diagnostics=False, verbose=False, *,
         else:
             detection_reason = "no safe lane polygon could be constructed"
     metadata = {
+        "undistorted": calibration is not None,
+        "calibration_scale": calibration_scale,
         "success": lane_overlay is not None,
         "detection_success": lane_overlay is not None,
         "detection_reason": detection_reason,
@@ -581,10 +636,26 @@ def process_frame(frame, diagnostics=False, verbose=False, *,
 
         diagnostic_images = dict(outputs)
     result_frame = lane_overlay if lane_overlay is not None else image.copy()
+    if SHOW_MEASUREMENTS:
+        # Reuse warped-image pixel measurements; no conversion to meters.
+        radius_labels = []
+        for side in ("Left", "Right"):
+            radius = curvature_radii.get(side)
+            label = "unavailable" if radius is None else f"{radius:.1f} px"
+            radius_labels.append(f"{side}: {label}")
+        curvature_text = "Curvature - " + "; ".join(radius_labels)
+        offset_text = "Vehicle offset: unavailable"
+        if vehicle_offset is not None:
+            offset = vehicle_offset["pixels"]
+            direction = "right" if offset > 0 else "left" if offset < 0 else "centered"
+            offset_text = f"Vehicle offset: {abs(offset):.1f} px ({direction} of lane center)"
+        for text, y in [(curvature_text, 25), (offset_text, 50)]:
+            cv2.putText(result_frame, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.5, (255, 255, 255), 1, cv2.LINE_AA)
     return result_frame, metadata, diagnostic_images
 
 
-def process_image(image_path, output_dir):
+def process_image(image_path, output_dir, calibration=None):
     """Load one image and preserve the existing diagnostic files and summary."""
     if not image_path.is_file():
         print(f"Error: input image file not found: {image_path}")
@@ -594,7 +665,9 @@ def process_image(image_path, output_dir):
         print(f"Error: could not read input image: {image_path}")
         return
 
-    _, metadata, diagnostic_images = process_frame(image, diagnostics=True, verbose=True)
+    _, metadata, diagnostic_images = process_frame(
+        image, diagnostics=True, verbose=True, calibration=calibration
+    )
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
     except OSError as error:
@@ -603,7 +676,8 @@ def process_image(image_path, output_dir):
 
     saves_succeeded = True
     for suffix, output_image in diagnostic_images.items():
-        output_path = output_dir / f"{image_path.stem}_{suffix}.jpg"
+        correction_suffix = "_undistorted" if calibration is not None else ""
+        output_path = output_dir / f"{image_path.stem}_{suffix}{correction_suffix}.jpg"
         try:
             saved = cv2.imwrite(str(output_path), output_image)
         except (OSError, cv2.error) as error:
@@ -626,6 +700,7 @@ def main():
     parser = argparse.ArgumentParser(description="Experiment with lane detection on test images.")
     parser.add_argument("image_filename", nargs="?", default=None)
     parser.add_argument("--all", action="store_true", help="Process all JPG, JPEG, and PNG images")
+    parser.add_argument("--undistort", action="store_true", help="Apply saved camera calibration")
     args = parser.parse_args()
     if args.all and args.image_filename is not None:
         parser.error("choose either an image filename or --all")
@@ -633,6 +708,11 @@ def main():
     project_root = Path(__file__).resolve().parent.parent
     test_dir = project_root / "test_images"
     output_dir = project_root / "output_images"
+    try:
+        calibration = load_calibration(project_root / "calibration_data" / "camera_calibration.npz") if args.undistort else None
+    except CalibrationError as error:
+        print(f"Error: {error}")
+        return
     if args.all:
         try:
             image_paths = sorted(
@@ -659,7 +739,7 @@ def main():
         print(f"\nProcessing {image_path.name}")
         # Isolate failures so the remaining batch can still be processed.
         try:
-            result = process_image(image_path, output_dir)
+            result = process_image(image_path, output_dir, calibration=calibration)
         except Exception as error:
             print(f"Error processing {image_path.name}: {error}")
             result = None
